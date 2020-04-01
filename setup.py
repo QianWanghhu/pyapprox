@@ -84,6 +84,7 @@ setuptools.setup(
         'jupyter'
       ],
     ext_modules = extensions,
+    include_dirs=[np.get_include()],
     test_suite='nose.collector',
     tests_require=['nose'],
     license='MIT',
