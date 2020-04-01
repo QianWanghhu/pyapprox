@@ -1,6 +1,6 @@
 r"""
 Multi-level Monte Carlo
-======================
+=======================
 This tutorial builds upon :ref:`sphx_glr_auto_tutorials_multi_fidelity_plot_control_variate_monte_carlo.py` and describes how the pioneering work of Multi-level Monte Carlo can be used to estimate the mean of a high-fidelity model using multiple low fidelity models. CVMC can be extended to multiple models however it is often not useful for practical analysis of numerical models. CVMC requires the means of the low fidelity models to be known a priori, but typically the mean of the lower fidelity model, i.e. :math:`\mu_\V{\kappa}`, is unknown and the cost of the lower fidelity model is non trivial. 
 
 Let :math:`f_0,\ldots,f_M` be an ensemble of :math:`M+1` models ordered by decreasing fidelity and cost (note typically MLMC literature reverses this order). MLMC provides a way to estimate the Before introducing many model MLMC estimator let us first discuss how to use MLMC with two models. 
@@ -163,3 +163,13 @@ print("Theoretical 3 model MLMC variance reduction for a pathalogical example",t
 
 #%%
 #Using MLMC for this ensemble of models creates an estimate with a variance orders of magnitude larger than just using the high-fidelity model.
+
+#%%
+#Multi-index Monte Carlo
+#-----------------------
+#Multilevel Monte Carlo utilizes a sequence of models controlled by a single hyper-parameter, specifying the level of discretization for example, in a manner that balances computational cost with increasing accuracy. In many applications, however, multiple hyper-parameters may control the model discretization, such as the mesh and time step sizes. In these situations, it may not be clear how to construct a one-dimensional hierarchy represented by a scalar hyper-parameter. To overcome this limitation, a generalization of multi-level Monte Carlo, referred to as multi-index stochastic collocation (MIMC), was developed to deal with multivariate hierarchies with multiple refinement hyper-parameters [HNTNM2016]_.  PyApprox does not implement MIMC but a surrogate based version called Multi-index stochastic collocation (MISC) is presented in this tutorial :ref:`sphx_glr_auto_tutorials_multi_fidelity_plot_multi_index_collocation.py`.
+
+#%%
+#References
+#^^^^^^^^^^
+#.. [HNTNM2016] `A. Haji-Ali, F. Nobile and R. Tempone. Multi-index Monte Carlo: when sparsity meets sampling. Numerische Mathematik, 132(4), 767-806, 2016. <https://doi.org/10.1007/s00211-015-0734-5>`_

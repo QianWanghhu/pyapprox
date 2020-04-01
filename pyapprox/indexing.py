@@ -31,6 +31,10 @@ def compute_next_combination(num_vars, level, extend, h, t, index):
     extend = ( index[num_vars-1] != level )
     return index, extend, h, t
 
+def num_total_degree_indices(num_vars,degree):
+    num_indices = nchoosek(num_vars + degree, num_vars)
+    return num_indices
+
 def compute_combinations(num_vars, level):
     if ( level > 0 ):
         num_indices = nchoosek(num_vars + level, num_vars) -\
@@ -135,7 +139,7 @@ from scipy.special import comb as scipy_comb
 def nchoosek(nn,kk):
     return int(np.round(scipy_comb(nn, kk)))
     
-def compute_hyperbolic_indices(num_vars, level, p):
+def compute_hyperbolic_indices(num_vars, level, p=1):
     assert level>=0
     indices = compute_hyperbolic_level_indices( num_vars, 0, p)
     for ll in range(1,level+1):
@@ -339,3 +343,50 @@ def compute_anisotropic_indices(num_vars,level,anisotropic_weights):
 
     subspace_indices = subspace_indices[:,indices_to_keep]
     return subspace_indices
+
+
+def get_upper_triangular_matrix_scalar_index(ii,jj,nn):
+    """
+    Get the scalar index kk of the (ii,jj) etnry of an upper triangular matrix 
+    (excluding diagonal) stored in a 1D array
+
+    For example
+    .. math:: 
+
+       \begin{bmatrix} 
+       0 & a_0 & a_1 & a_2\\
+       0 & 0   & a_3 & a_4\\
+       0 & 0   & 0   & a_5\\
+       0 & 0   & 0   & 0
+       \end{bmatrix}
+
+    is stored as 
+
+    .. math::  \begin{bmatrix} [a_0,a_1,a_2,a_3,a_4,a_5]\end{bmatrix}
+    """
+    assert ii<jj
+    kk = (nn*(nn-1)//2) - (nn-ii)*((nn-ii)-1)//2 + jj - ii - 1
+    return int(kk)
+
+def get_upper_triangular_matrix_indices(kk,nn):
+    """
+    Get the index tuple (ii,jj) entry kk of an upper triangular matrix 
+    (excluding diagonal) stored in a 1D array
+
+    For example
+    .. math:: 
+
+       \begin{bmatrix} 
+       0 & a_0 & a_1 & a_2\\
+       0 & 0   & a_3 & a_4\\
+       0 & 0   & 0   & a_5\\
+       0 & 0   & 0   & 0
+       \end{bmatrix}
+
+    is stored as 
+
+    .. math::  \begin{bmatrix} [a_0,a_1,a_2,a_3,a_4,a_5]\end{bmatrix}
+    """
+    ii = nn - 2 - np.floor(np.sqrt(-8*kk + 4*nn*(nn-1)-7)/2.0 - 0.5)
+    jj = kk + ii + 1 - nn*(nn-1)/2 + (nn-ii)*((nn-ii)-1)/2
+    return int(ii),int(jj)

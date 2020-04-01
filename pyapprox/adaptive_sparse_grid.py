@@ -130,6 +130,7 @@ def max_level_admissibility_function(max_level,max_level_1d,
                     sparse_grid.error.sum())
                 msg += "\nNo. active subspaces remaining %d"%len(
                     sparse_grid.active_subspace_queue.list)
+                msg += f'\nNo. samples {sparse_grid.samples.shape[1]}'
                 if verbose:
                     print(msg)
             #else:
@@ -142,13 +143,17 @@ def max_level_admissibility_function(max_level,max_level_1d,
         for dd in range(subspace_index.shape[0]):
             if subspace_index[dd]>max_level_1d[dd]:
                 if verbose:
-                    print ('Max level reached in variable dd')
+                    msg = f'Cannot add subspace {subspace_index}\n'
+                    msg += f'Max level of {max_level_1d[dd]} reached in '
+                    msg += f'variable {dd}'
+                    print (msg)
                 return False
     if (max_num_sparse_grid_samples is not None and
         (sparse_grid.num_equivalent_function_evaluations>
          max_num_sparse_grid_samples)):
         if verbose:
-            print ('Max num evaluations reached')
+            print(f'Max num evaluations ({max_num_sparse_grid_samples}) reached')
+            print(f'Error {sparse_grid.error.sum()}')
         return False
     return True
         
@@ -315,7 +320,8 @@ def variance_refinement_indicator_old(subspace_index,num_new_subspace_samples,
 
 
 def variance_refinement_indicator(subspace_index,num_new_subspace_samples,
-                                  sparse_grid,normalize=True,mean_only=False):
+                                  sparse_grid,normalize=True,
+                                  mean_only=False):
     """
     when config index is increased but the other indices are 0 the
     subspace will only have one random sample. Thus the variance
@@ -339,10 +345,14 @@ def variance_refinement_indicator(subspace_index,num_new_subspace_samples,
 
     indicator=error.copy()
                 
-    # relative error will not work if value at first grid point is close to zero
     if normalize:
-        assert np.all(np.absolute(sparse_grid.values[0,:])>1e-6)
-        indicator/=np.absolute(sparse_grid.values[0,:])**2
+        # relative error will not work if value at first grid point is
+        # close to zero
+        #assert np.all(np.absolute(sparse_grid.values[0,:])>1e-6)
+        denom = np.absolute(sparse_grid.values[0,:])
+        I = np.where(denom<1e-6)[0]
+        denom[I]=1
+        indicator/=denom**2
 
     qoi_chosen = np.argmax(indicator)
     #print (qoi_chosen)
@@ -1078,7 +1088,7 @@ class SubSpaceRefinementManager(object):
             #print(num_subspace_samples,subspace_index)
             # compute priority and error for subspace
             priority, error = self.refinement_indicator(
-                    subspace_index, num_subspace_samples, self)
+                subspace_index, num_subspace_samples, self)
             new_item = (priority, error, count)
             self.active_subspace_queue.put(new_item)
             self.error[count] = error
@@ -1115,7 +1125,11 @@ def get_unique_quadrule_variables(var_trans):
     return unique_quadrule_variables, unique_quadrule_indices
 
 def get_sparse_grid_univariate_leja_quadrature_rules_economical(
-        var_trans,growth_rules=None):       
+        var_trans,growth_rules=None):
+    """
+    Return a list of unique quadrature rules. If each dimension has the same
+    rule then list will only have one entry.
+    """
     assert var_trans is not None
     
     if growth_rules is None:
@@ -1140,10 +1154,13 @@ def get_sparse_grid_univariate_leja_quadrature_rules_economical(
 
     return quad_rules, growth_rules, unique_quadrule_indices
 
-def get_sparse_grid_univariate_leja_quadrature_rules_economical(
-        var_trans,growth_rules=None):       
+def get_sparse_grid_univariate_leja_quadrature_rules(
+        var_trans,growth_rules=None):
+    """
+    Return a list of quadrature rules for every variable
+    """
     unique_quad_rules, unique_growth_rules, unique_quadrule_indices = \
-        pya.get_sparse_grid_univariate_leja_quadrature_rules_economical(
+        get_sparse_grid_univariate_leja_quadrature_rules_economical(
             var_trans,growth_rules=None)
     quad_rules = [None for ii in var_trans.num_vars()]
     growth_rules = [None for ii in var_trans.num_vars()]

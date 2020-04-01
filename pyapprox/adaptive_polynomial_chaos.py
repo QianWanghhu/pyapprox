@@ -69,16 +69,16 @@ def solve_preconditioned_least_squares(basis_matrix_func,samples,values,
     coef = np.linalg.lstsq(basis_matrix,rhs,rcond=None)[0]
     return coef
 
-from sklearn.linear_model import OrthogonalMatchingPursuit
 def solve_preconditioned_orthogonal_matching_pursuit(basis_matrix_func,
                                                      samples,values,
                                                      precond_func,
                                                      tol=1e-8):
+    from sklearn.linear_model import OrthogonalMatchingPursuit
     basis_matrix = basis_matrix_func(samples)
     weights = precond_func(basis_matrix,samples)
     basis_matrix = basis_matrix*weights[:,np.newaxis]
     rhs = values*weights[:,np.newaxis]
-    omp = OrthogonalMatchingPursuit(tol=tol)
+    omp = OrthogonalMatchingPursuit(tol=tol,fit_intercept=False)
     omp.fit(basis_matrix, rhs)
     coef = omp.coef_
     print('nnz_terms',np.count_nonzero(coef))
@@ -95,14 +95,18 @@ class AdaptiveInducedPCE(SubSpaceRefinementManager):
         self.precond_func = chistoffel_preconditioning_function
         self.omp_tol=0
 
-    def set_function(self,function,var_trans=None,poly_opts=None):
+    def set_function(self,function,var_trans=None,pce=None):
         super(AdaptiveInducedPCE,self).set_function(function,var_trans)
-        
-        self.pce = PolynomialChaosExpansion()
-        if poly_opts is None:
+        self.set_polynomial_chaos_expansion(pce)
+
+    def set_polynomial_chaos_expansion(self,pce=None):
+        if pce is None:
             poly_opts=define_poly_options_from_variable_transformation(
                 self.variable_transformation)
-        self.pce.configure(poly_opts)
+            self.pce = PolynomialChaosExpansion()
+            self.pce.configure(poly_opts)
+        else:
+            self.pce=pce
 
     def create_new_subspaces_data(self,new_subspace_indices):
         num_current_subspaces = self.subspace_indices.shape[1]
@@ -209,6 +213,14 @@ class AdaptiveLejaPCE(AdaptiveInducedPCE):
                 self,num_current_subspaces+ii)
             num_new_subspace_samples[ii] = I.shape[0]
         return num_new_subspace_samples
+
+    def condition_number(self):
+        if self.factorization_type=='slow':
+            return np.linalg.cond(self.L_factor.dot(self.U_factor))
+        else:
+            L,U = split_lu_factorization_matrix(
+                self.LU_factor,num_pivots=self.samples.shape[1])
+            return np.linalg.cond(L.dot(U))
 
     def update_leja_sequence_slow(self,new_subspace_indices):
         num_samples = self.samples.shape[1]
@@ -346,13 +358,13 @@ class AdaptiveLejaPCE(AdaptiveInducedPCE):
         I = get_active_poly_array_indices(self)
         return self.poly_indices[:,I]
 
-    def build(self):
+    def build(self,callback):
         """
         """
         while (not self.active_subspace_queue.empty() or
                self.subspace_indices.shape[1]==0):
             self.refine()
             self.recompute_active_subspace_priorities()
-
-
             
+            if callback is not None:
+                callback(self)

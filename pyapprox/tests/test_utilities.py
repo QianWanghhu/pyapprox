@@ -544,13 +544,13 @@ class TestUtilities(unittest.TestCase):
         nrows, npivots = 4, 4
         A = np.random.normal(0.,1.,(nrows,nrows))
         A = A.T.dot(A)
-        L, pivots, error = pivoted_cholesky_decomposition(A,npivots)
+        L, pivots, error, flag = pivoted_cholesky_decomposition(A,npivots)
         assert np.allclose(L.dot(L.T),A)
 
         nrows, npivots = 4, 2
         A = np.random.normal(0.,1.,(npivots,nrows))
         A = A.T.dot(A)
-        L, pivots, error = pivoted_cholesky_decomposition(A,npivots)
+        L, pivots, error, flag = pivoted_cholesky_decomposition(A,npivots)
         assert L.shape == (nrows,npivots)
         assert pivots.shape[0]==npivots
         assert np.allclose(L.dot(L.T),A)
@@ -559,8 +559,8 @@ class TestUtilities(unittest.TestCase):
         nrows, npivots = 4, 2
         A = np.random.normal(0.,1.,(npivots+1,nrows))
         A = A.T.dot(A)
-        L, pivots, error = pivoted_cholesky_decomposition(A,npivots+1)
-        L, new_pivots, error = pivoted_cholesky_decomposition(
+        L, pivots, error, flag = pivoted_cholesky_decomposition(A,npivots+1)
+        L, new_pivots, error, flag = pivoted_cholesky_decomposition(
             A,npivots+1,init_pivots=pivots[1:2])
         assert np.allclose(new_pivots[:npivots+1],pivots[[1,0,2]])
 
@@ -571,7 +571,7 @@ class TestUtilities(unittest.TestCase):
         assert np.allclose(P.dot(A).dot(P.T),L.dot(L.T))
 
         A = np.array([[4,12,-16],[12,37,-43],[-16,-43,98.]])
-        L, pivots, error = pivoted_cholesky_decomposition(A,A.shape[0])
+        L, pivots, error, flag = pivoted_cholesky_decomposition(A,A.shape[0])
 
         # reorder entries of A so that cholesky requires pivoting
         true_pivots = np.array([2,1,0])
@@ -583,7 +583,7 @@ class TestUtilities(unittest.TestCase):
         A = np.array([[4,12,-16],[12,37,-43],[-16,-43,98.]])
         true_pivots = np.array([1,0,2])
         A = A[true_pivots,:][:,true_pivots]
-        L, pivots, error = pivoted_cholesky_decomposition(A,A.shape[0])
+        L, pivots, error, flag = pivoted_cholesky_decomposition(A,A.shape[0])
         assert np.allclose(L[pivots,:],L_np)
 
     def test_beta_pdf_on_ab(self):
@@ -632,6 +632,46 @@ class TestUtilities(unittest.TestCase):
                     beta_pdf_on_ab(alpha_stat,beta_stat,-1,1,x-eps))/eps
         assert np.allclose(deriv,fd_deriv)
 
+    def test_compute_f_divergence(self):
+        # KL divergence
+        from scipy.stats import multivariate_normal
+        nvars=1
+        mean = np.random.uniform(-0.1,0.1,nvars)
+        cov  = np.diag(np.random.uniform(.5,1,nvars))
+        rv1 = multivariate_normal(mean,cov)
+        rv2 = multivariate_normal(np.zeros(nvars),np.eye(nvars))
+        density1 = lambda x: rv1.pdf(x.T)
+        density2 = lambda x: rv2.pdf(x.T)
+
+        # Integrate on [-radius,radius]
+        # Note this induces small error by truncating domain
+        radius=10
+        from pyapprox import get_tensor_product_quadrature_rule
+        x,w=get_tensor_product_quadrature_rule(
+            400,nvars,np.polynomial.legendre.leggauss,
+            transform_samples=lambda x: x*radius,
+            density_function=lambda x: radius*np.ones(x.shape[1]))
+        quad_rule=x,w
+        div = compute_f_divergence(density1,density2,quad_rule,'KL',
+                                   normalize=False)
+        true_div = 0.5*(np.diag(cov)+mean**2-np.log(np.diag(cov))-1).sum()
+        assert np.allclose(div,true_div,rtol=1e-12)
+
+        # Hellinger divergence
+        from scipy.stats import beta
+        a1,b1,a2,b2=1,1,2,3
+        rv1,rv2 = beta(a1,b1),beta(a2,b2)
+        true_div = 2*(1-beta_fn((a1+a2)/2,(b1+b2)/2)/np.sqrt(
+            beta_fn(a1,b1)*beta_fn(a2,b2)))
+        
+        x,w=get_tensor_product_quadrature_rule(
+            500,nvars,np.polynomial.legendre.leggauss,
+            transform_samples=lambda x: (x+1)/2,
+            density_function=lambda x: 0.5*np.ones(x.shape[1]))
+        quad_rule=x,w
+        div = compute_f_divergence(rv1.pdf,rv2.pdf,quad_rule,'hellinger',
+                                   normalize=False)
+        assert np.allclose(div,true_div,rtol=1e-10)
         
 
 if __name__== "__main__":    

@@ -14,6 +14,7 @@ from pyapprox.manipulate_polynomials import get_indices_double_set
 from pyapprox.variable_transformations import \
     AffineBoundedVariableTransformation, AffineRandomVariableTransformation
 from pyapprox.variables import IndependentMultivariateRandomVariable
+import sympy as sp
 
 skiptest = unittest.skip("test not completely implemented")
 
@@ -410,7 +411,6 @@ class TestSparseGrid(unittest.TestCase):
         J = np.arange(poly_indices.shape[1])
         coeffs = np.random.normal(0.0,1.0,(J.shape[0]))
 
-
         x,y = sp.Symbol('x'),sp.Symbol('y')
         monomial_expansion = 0
         for ii in range(poly_indices.shape[1]):
@@ -427,7 +427,7 @@ class TestSparseGrid(unittest.TestCase):
 
         values = evaluate_monomial(poly_indices[:,J],coeffs,samples)
         assert np.allclose(np.dot(values[:,0],weights),exact_mean)
-
+        
     def test_sparse_grid_integration_binomial_leja(self):
         num_vars = 2; level = 5
 
@@ -454,7 +454,7 @@ class TestSparseGrid(unittest.TestCase):
             candidate_based_leja_rule,recursion_coeffs,
             generate_candidate_samples,
             num_trials+1,
-            initial_samples=np.atleast_2d(
+            initial_points=np.atleast_2d(
                 [binomial_rv.ppf(0.5,num_trials,prob_success)]),
             samples_filename=samples_filename,
             return_weights_for_all_levels=True)
@@ -1859,6 +1859,34 @@ class TestAdaptiveMultiIndexSparseGrid(unittest.TestCase):
         pce_values =  pce(validation_samples[:num_vars,:])
         assert np.allclose(pce_values,sg_values)
         assert np.allclose(pce_values,validation_values)
+
+    def test_combination_sparse_grid_setup(self):
+        import pyapprox as pya
+        from scipy.stats import beta,uniform
+        univariate_variables = [uniform(-1,2)]*2
+        variable = pya.IndependentMultivariateRandomVariable(
+            univariate_variables)
+        var_trans = pya.AffineRandomVariableTransformation(variable)
+        sparse_grid = CombinationSparseGrid(var_trans.num_vars())
+        admissibility_function = partial(
+            max_level_admissibility_function,np.inf,[6]*2,100,0,verbose=False)
+        quad_rules, growth_rules, unique_quadrule_indices = \
+            get_sparse_grid_univariate_leja_quadrature_rules_economical(
+            var_trans)
+        def function(samples):
+            return ((samples+1)**5).sum(axis=0)[:,np.newaxis]
+        sparse_grid.setup(function, None, variance_refinement_indicator,
+                          admissibility_function, growth_rules, quad_rules,
+                          var_trans,
+                          unique_quadrule_indices=unique_quadrule_indices)
+        sparse_grid.build()
+
+        validation_samples = pya.generate_independent_random_samples(
+            var_trans.variable,10)
+        vals = sparse_grid(validation_samples)
+        validation_values = function(validation_samples)
+        assert np.allclose(validation_values,vals)
+        
             
 if __name__== "__main__":
     # these functions need to be defined here so pickeling works

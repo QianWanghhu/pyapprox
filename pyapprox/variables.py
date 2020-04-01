@@ -78,13 +78,7 @@ def variables_equivalent(rv1,rv2):
         return False
     if scales1!=scales2:
         return False
-    if name1=='float_rv_discrete' or name1=='discrete_chebyshev':
-        # xk and pk shapes are list so != comparison will not work
-        return np.all(shapes1['xk']==shapes2['xk']) and np.all(
-            shapes1['pk']==shapes1['pk'])
-    else:
-        return shapes1==shapes2
-
+    return variable_shapes_equivalent(rv1,rv2)
 
 def get_unique_variables(variables):
     nvars = len(variables)
@@ -105,8 +99,15 @@ def get_unique_variables(variables):
 def variable_shapes_equivalent(rv1,rv2):
     name1, __, shapes1 = get_distribution_info(rv1)
     name2, __, shapes2 = get_distribution_info(rv2)
-    if name1!=name2 or shapes1!=shapes2:
+    if name1!=name2:
         return False
+    if name1=='float_rv_discrete' or name1=='discrete_chebyshev':
+        # xk and pk shapes are list so != comparison will not work
+        not_equiv = np.any(shapes1['xk']!=shapes2['xk']) or np.any(
+            shapes1['pk']!=shapes2['pk'])
+        return not not_equiv
+    else:
+        return shapes1==shapes2
     return True
 
 class IndependentMultivariateRandomVariable(object):
@@ -157,6 +158,36 @@ class IndependentMultivariateRandomVariable(object):
         return all_variables
 
     def get_statistics(self,function_name,**kwargs):
+        """
+        Get a statistic from each univariate random variable.
+
+        Parameters
+        ----------
+        function_name : string
+            The function name of the scipy random variable statistic of interest
+
+        kwargs : kwargs
+            The arguments to the scipy statistic function
+
+        Returns
+        -------
+        stat : 
+            The output of the stat function
+
+        Examples
+        --------
+        >>> import pyapprox as pya
+        >>> from scipy.stats import uniform
+        >>> num_vars = 2
+        >>> variable = pya.IndependentMultivariateRandomVariable([uniform(-2,3)],[np.arange(num_vars)])
+        >>> variable.get_statistics('interval',alpha=1)
+        array([[-2.,  1.],
+               [-2.,  1.]])
+        >>> variable.get_statistics('pdf',x=np.linspace(-2,1,3))
+        array([[0.33333333, 0.33333333, 0.33333333],
+               [0.33333333, 0.33333333, 0.33333333]])
+        
+        """
         for ii in range(self.nunique_vars):
             var = self.unique_variables[ii]
             indices = self.unique_variable_indices[ii]
@@ -177,6 +208,10 @@ class IndependentMultivariateRandomVariable(object):
                 stats = np.empty((self.num_vars(),stats_ii.shape[0]))
             stats[indices]=stats_ii
         return stats
+
+    def pdf(self,x):
+        marginal_vals = self.evaluate('pdf',x)
+        return np.prod(marginal_vals,axis=0)
 
     def __str__(self):
         variable_labels = self.variable_labels
