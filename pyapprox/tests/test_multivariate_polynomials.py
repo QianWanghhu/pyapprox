@@ -409,6 +409,34 @@ class TestMultivariatePolynomials(unittest.TestCase):
         assert np.allclose(poly.mean(),true_mean)
         assert np.allclose(poly.variance(),true_variance)
 
+    def test_pce_jacobian(self):
+        degree = 2;
+
+        alpha_stat,beta_stat=2,3
+        univariate_variables = [beta(alpha_stat,beta_stat,0,1),norm(-1,2)]
+        variable = IndependentMultivariateRandomVariable(univariate_variables)
+        var_trans = AffineRandomVariableTransformation(variable)
+        num_vars = len(univariate_variables)
+
+        poly = PolynomialChaosExpansion()
+        poly_opts = define_poly_options_from_variable_transformation(var_trans)
+        poly.configure(poly_opts)
+        
+        indices = compute_hyperbolic_indices(num_vars,degree,1.0)
+        poly.set_indices(indices)
+
+        sample = generate_independent_random_samples(variable,1)
+
+        coef = np.ones((indices.shape[1],2))
+        coef[:,1]*=2
+        poly.set_coefficients(coef)
+
+        jac = poly.jacobian(sample)
+        from pyapprox.optimization import approx_jacobian
+        fd_jac = approx_jacobian(
+            lambda x: poly(x[:,np.newaxis])[0,:],sample[:,0])
+        assert np.allclose(jac,fd_jac)
+
     def test_hahn_hypergeometric(self):
         degree = 4;
         M,n,N = 20,7,12
@@ -458,6 +486,7 @@ class TestMultivariatePolynomials(unittest.TestCase):
         var_trans = AffineRandomVariableTransformation([rv])
         poly = PolynomialChaosExpansion()
         poly_opts = define_poly_options_from_variable_transformation(var_trans)
+        poly_opts['numerically_generated_poly_accuracy_tolerance']=1e-9
         poly.configure(poly_opts)
         poly.set_indices(np.arange(degree+1)[np.newaxis,:])
         p = poly.basis_matrix(xk[np.newaxis,:])
@@ -506,8 +535,154 @@ class TestMultivariatePolynomials(unittest.TestCase):
         assert np.allclose(true_mean,mean)
         assert np.allclose(true_variance,variance)
 
+    def test_compute_univariate_orthonormal_basis_products(self):
+        max_degree1,max_degree2=3,2
+
+        get_recursion_coefficients = partial(
+            jacobi_recurrence, alpha=0., beta=0., probability=True)
+
+        product_coefs = compute_univariate_orthonormal_basis_products(
+            get_recursion_coefficients,max_degree1,max_degree2)
+
+
+        max_degree = max_degree1+max_degree2
+        x = np.linspace(-1,1,51)
+        recursion_coefs = get_recursion_coefficients(max_degree+1)
+        ortho_basis_matrix = evaluate_orthonormal_polynomial_1d(
+            x, max_degree, recursion_coefs)
+
+        kk=0
+        for d1 in range(max_degree1+1):
+            for d2 in range(min(d1+1,max_degree2+1)):
+                exact_product=ortho_basis_matrix[:,d1]*ortho_basis_matrix[:,d2]
+
+                product = ortho_basis_matrix[:,:product_coefs[kk].shape[0]].dot(
+                    product_coefs[kk]).sum(axis=1)
+                assert np.allclose(product,exact_product)
+                kk+=1
+
+    def test_compute_multivariate_orthonormal_basis_product(self):
+        univariate_variables = [norm(),uniform()]
+        variable = IndependentMultivariateRandomVariable(
+            univariate_variables)
+
+        poly1 = get_polynomial_from_variable(variable)
+        poly2 = get_polynomial_from_variable(variable)
+
+        max_degrees1, max_degrees2 = [3,3],[2,2]
+        product_coefs_1d = compute_product_coeffs_1d_for_each_variable(
+                poly1,max_degrees1,max_degrees2)
+
+        for ii in range(max_degrees1[0]):
+            for jj in range(max_degrees1[1]):
+                poly_index_ii,poly_index_jj=np.array([ii,jj]),np.array([ii,jj])
+
+                poly1.set_indices(poly_index_ii[:,np.newaxis])
+                poly1.set_coefficients(np.ones([1,1]))
+                poly2.set_indices(poly_index_jj[:,np.newaxis])
+                poly2.set_coefficients(np.ones([1,1]))
+
+                product_indices, product_coefs = \
+                    compute_multivariate_orthonormal_basis_product(
+                        product_coefs_1d,poly_index_ii,poly_index_jj,
+                        max_degrees1,max_degrees2)
+
+                poly_prod = get_polynomial_from_variable(variable)
+                poly_prod.set_indices(product_indices)
+                poly_prod.set_coefficients(product_coefs)
+
+                samples = generate_independent_random_samples(variable,5)
+                #print(poly_prod(samples),poly1(samples)*poly2(samples))
+            assert np.allclose(poly_prod(samples),poly1(samples)*poly2(samples))
+
+
+    def test_multiply_multivariate_orthonormal_polynomial_expansions(self):
+        univariate_variables = [norm(),uniform()]
+        variable = IndependentMultivariateRandomVariable(
+            univariate_variables)
+
+        degree1,degree2=3,2
+        poly1 = get_polynomial_from_variable(variable)
+        poly1.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree1))
+        poly1.set_coefficients(np.random.normal(0,1,(poly1.indices.shape[1],1)))
+        poly2 = get_polynomial_from_variable(variable)
+        poly2.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree2))
+        poly2.set_coefficients(np.random.normal(0,1,(poly2.indices.shape[1],1)))
+
+        max_degrees1 = poly1.indices.max(axis=1)
+        max_degrees2 = poly2.indices.max(axis=1)
+        product_coefs_1d = compute_product_coeffs_1d_for_each_variable(
+            poly1,max_degrees1,max_degrees2)
+
+        indices,coefs=multiply_multivariate_orthonormal_polynomial_expansions(
+            product_coefs_1d,poly1.get_indices(),poly1.get_coefficients(),
+            poly2.get_indices(),poly2.get_coefficients())
+
+        poly3 = get_polynomial_from_variable(variable)
+        poly3.set_indices(indices)
+        poly3.set_coefficients(coefs)
+
+        samples = generate_independent_random_samples(variable,10)
+        #print(poly3(samples),poly1(samples)*poly2(samples))
+        assert np.allclose(poly3(samples),poly1(samples)*poly2(samples))
+
+    def test_multiply_pce(self):
+        np.random.seed(1)
+        np.set_printoptions(precision=16)
+        univariate_variables = [norm(),uniform()]
+        variable = IndependentMultivariateRandomVariable(
+            univariate_variables)
+        degree1,degree2=1,2
+        poly1 = get_polynomial_from_variable(variable)
+        poly1.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree1))
+        poly2 = get_polynomial_from_variable(variable)
+        poly2.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree2))
+
+        #coef1 = np.random.normal(0,1,(poly1.indices.shape[1],1))
+        #coef2 = np.random.normal(0,1,(poly2.indices.shape[1],1))
+        coef1 = np.arange(poly1.indices.shape[1])[:,np.newaxis]
+        coef2 = np.arange(poly2.indices.shape[1])[:,np.newaxis]
+        poly1.set_coefficients(coef1)
+        poly2.set_coefficients(coef2)
+
+        poly3 = poly1*poly2
+        samples = generate_independent_random_samples(variable,10)
+        assert np.allclose(poly3(samples),poly1(samples)*poly2(samples))
+
+        for order in range(4):
+            poly = poly1**order
+            assert np.allclose(poly(samples),poly1(samples)**order)
+        
+    def test_add_pce(self):
+        univariate_variables = [norm(),uniform()]
+        variable = IndependentMultivariateRandomVariable(
+            univariate_variables)
+        degree1,degree2=2,3
+        poly1 = get_polynomial_from_variable(variable)
+        poly1.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree1))
+        poly1.set_coefficients(np.random.normal(0,1,(poly1.indices.shape[1],1)))
+        poly2 = get_polynomial_from_variable(variable)
+        poly2.set_indices(compute_hyperbolic_indices(
+            variable.num_vars(),degree2))
+        poly2.set_coefficients(np.random.normal(0,1,(poly2.indices.shape[1],1)))
+
+        poly3 = poly1+poly2+poly2
+        samples = generate_independent_random_samples(variable,10)
+        #print(poly3(samples),poly1(samples)*poly2(samples))
+        assert np.allclose(poly3(samples),poly1(samples)+2*poly2(samples))
+
+        poly4 = poly1-poly2
+        samples = generate_independent_random_samples(variable,10)
+        #print(poly3(samples),poly1(samples)*poly2(samples))
+        assert np.allclose(poly4(samples),poly1(samples)-poly2(samples))
 
 if __name__== "__main__":    
     multivariate_polynomials_test_suite = \
  unittest.TestLoader().loadTestsFromTestCase(TestMultivariatePolynomials)
-    unittest.TextTestRunner(verbosity=2).run(multivariate_polynomials_test_suite)
+    unittest.TextTestRunner(verbosity=2).run(
+        multivariate_polynomials_test_suite)

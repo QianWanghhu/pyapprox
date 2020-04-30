@@ -3,6 +3,7 @@ from __future__ import (absolute_import, division,
 import numpy as np
 from scipy.special import beta as beta_fn
 from functools import partial
+from scipy.linalg import solve_triangular
 
 def sub2ind(sizes, multi_index):
     r"""
@@ -1109,8 +1110,8 @@ def pivoted_cholesky_decomposition(A,npivots,init_pivots=None,tol=0.,
 
     Then P.T.dot(A).P == L.dot(L.T)
 
-    where P is the standrad pivot matrix which can be obtained from the pivot 
-    vector using the function 
+    where P is the standard pivot matrix which can be obtained from the 
+    pivot vector using the function 
     """
     chol_flag = 0
     Amat = A.copy()
@@ -1397,3 +1398,54 @@ def compute_f_divergence(density1,density2,quad_rule,div_type,
     divergence_integrand = f(ratios)*d2_vals
 
     return divergence_integrand.dot(w)
+
+def cholesky_solve_linear_system(L,rhs):
+    """
+    Solve LL'x = b using forwards and backwards substitution
+    """
+    # Use forward subsitution to solve Ly = b
+    y = solve_triangular(L,rhs,lower=True)
+    # Use backwards subsitution to solve L'x = y
+    y = solve_triangular(L.T,y,lower=False)
+    return x
+
+def num_entries_square_triangular_matrix(N,include_diagonal=True):
+    """Num entries in upper (or lower) NxN traingular matrix"""
+    if include_diagonal:
+        return int(N*(N+1)/2)
+    else:
+        return int(N*(N-1)/2)
+
+def num_entries_rectangular_triangular_matrix(M,N,upper=True):
+    """Num entries in upper (or lower) MxN traingular matrix.
+    This is useful for nested for loops like
+
+    (upper=True)
+    
+    for ii in range(M):
+        for jj in range(ii+1):
+
+    (upper=False)
+
+    for jj in range(N):
+        for ii in range(jj+1):
+
+    """
+    assert M>=N
+    if upper:
+        return num_entries_square_triangular_matrix(N)
+    else:
+        return num_entries_square_triangular_matrix(M)-\
+            num_entries_square_triangular_matrix(M-N)
+
+def flattened_rectangular_lower_triangular_matrix_index(ii,jj,M,N):
+    """
+    Get flattened index kk from row and column indices (ii,jj) of a lower triangular part of MxN matrix
+    """
+    assert M>=N
+    assert ii>=jj
+    if ii==0:
+        return 0
+    T = num_entries_rectangular_triangular_matrix(ii,min(ii,N),upper=False)
+    kk = T+jj
+    return kk

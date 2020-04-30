@@ -124,7 +124,7 @@ print('MC error',abs(hf_mean-true_mean))
 #
 #where  :math:`\tau_\alpha=\left(\frac{\var{Q_\alpha}}{\var{Q_0}}\right)^{\frac{1}{2}}`. Recall that and :math:`\hat{r}_\alpha=\lvert\mathcal{Z}_{\alpha,2}\rvert/N` is the ratio of the cardinality of the sets :math:`\mathcal{Z}_{\alpha,2}` and :math:`\mathcal{Z}_{0,2}`. 
 #
-#The following code computes the variance reduction of the MLMC estimator, using the 2 models :math:`f_0,f_1`. The variance reduction is estimated numerically by  running MLMC repeatedly with different realizations of the sample sets. The function :math:`\texttt{get_rsquared_mlmc}` is used to return the theoretical variance reduction.
+#The following code computes the variance reduction of the MLMC estimator, using the 2 models :math:`f_0,f_1`. The variance reduction is estimated numerically by  running MLMC repeatedly with different realizations of the sample sets. The function ``get_rsquared_mlmc`` is used to return the theoretical variance reduction.
 ntrials=1e1
 get_cv_weights_mlmc = pya.get_mlmc_control_variate_weights_pool_wrapper
 means1, numerical_var_reduction1, true_var_reduction1 = \
@@ -228,7 +228,7 @@ mfmc_mean = pya.compute_approximate_control_variate_mean_estimate(eta,values)
 
 # get the true mean of the high-fidelity model
 true_mean = short_column_model.get_means()[0]
-print('MLMC error',abs(mfmc_mean-true_mean))
+print('MFMC error',abs(mfmc_mean-true_mean))
 print('MC error',abs(hf_mean-true_mean))
 
 #%%

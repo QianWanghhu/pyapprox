@@ -7,6 +7,10 @@ from pyapprox.control_variate_monte_carlo import *
 from scipy.stats import uniform,norm,lognorm
 from functools import partial
 
+skiptest = unittest.skipIf(
+    not use_torch, reason="active_subspace package missing")
+
+
 class PolynomialModelEnsemble(object):
     def __init__(self):
         self.nmodels=5
@@ -18,7 +22,6 @@ class PolynomialModelEnsemble(object):
             univariate_variables)
         self.generate_samples=partial(
             pya.generate_independent_random_samples,self.variable)
-
 
     def m0(self,samples):
         return samples.T**5
@@ -516,7 +519,7 @@ class TestCVMC(unittest.TestCase):
         
         target_cost = 81
 
-        estimator = MLMC(cov,costs,target_cost)
+        estimator = MLMC(cov,costs)
         estimator.use_lagrange_formulation(True)
 
         nhf_samples_exact, nsample_ratios_exact = allocate_samples_mlmc(
@@ -532,12 +535,15 @@ class TestCVMC(unittest.TestCase):
 
         x0 = np.concatenate([[nhf_samples_exact],nsample_ratios_exact,
                              [lagrange_mult]])
-        jac = estimator.jacobian(x0)
-        # objective does not have lagrangian shift so account for it
-        # missing here
-        mlmc_var = estimator.variance_reduction(
-            nsample_ratios_exact).item()*cov[0,0]/nhf_samples_exact
-        jac[-1]-=mlmc_var
+        if use_torch:
+            jac = estimator.jacobian(x0)
+            # objective does not have lagrangian shift so account for it
+            # missing here
+            mlmc_var = estimator.variance_reduction(
+                nsample_ratios_exact).item()*cov[0,0]/nhf_samples_exact
+            jac[-1]-=mlmc_var
+        else:
+            jac=None
         
         estimator.use_lagrange_formulation(False)
 
@@ -594,6 +600,7 @@ class TestCVMC(unittest.TestCase):
         # To recover alexs answer use his standardization and initial guess
         # is mlmc with standardize=True')
 
+    @skiptest
     def test_ACVMC_objective_jacobian(self):
         
         cov = np.asarray([[1.00,0.50,0.25],
@@ -607,7 +614,7 @@ class TestCVMC(unittest.TestCase):
         nhf_samples, nsample_ratios =  pya.allocate_samples_mlmc(
             cov, costs, target_cost)[:2]
 
-        estimator = ACVMF(cov,costs,target_cost)
+        estimator = ACVMF(cov,costs)
         errors = pya.check_gradients(
             partial(acv_sample_allocation_objective,estimator),
             partial(acv_sample_allocation_jacobian,estimator),
