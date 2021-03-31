@@ -505,7 +505,7 @@ def analyze_sensitivity_morris(fun, univariate_variables, ntrajectories, nlevels
 
     nvars = len(univariate_variables)
     samples = get_morris_samples(nvars, nlevels, ntrajectories)
-    values = function(samples)
+    values = fun(samples)
     elem_effects = get_morris_elementary_effects(samples, values)
     mu, sigma = get_morris_sensitivity_indices(elem_effects)
 
@@ -752,5 +752,6 @@ def sampling_based_sobol_indices_from_gaussian_process(
     return all_interaction_values.mean(axis=0), \
         all_total_effect_values.mean(axis=0), all_variances.mean(axis=0),\
         all_interaction_values.std(axis=0), \
-        all_total_effect_values.std(axis=0), all_variances.std(axis=0),
+        all_total_effect_values.std(axis=0), all_variances.std(axis=0),\
+        all_total_effect_values
  

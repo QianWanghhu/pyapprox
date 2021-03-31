@@ -340,7 +340,8 @@ class TestSensitivityAnalysis(unittest.TestCase):
             np.where(interaction_terms.max(axis=0)==1)[0]]
 
         mean_sobol_indices, mean_total_effects, mean_variance, \
-            std_sobol_indices, std_total_effects, std_variance = \
+            std_sobol_indices, std_total_effects, std_variance, \
+            all_total_effects= \
                 sampling_based_sobol_indices_from_gaussian_process(
                     approx, benchmark.variable, interaction_terms, nsamples,
                     sampling_method='sobol', ngp_realizations=10,

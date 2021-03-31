@@ -6,7 +6,7 @@
         "depends": [],
         "name": "pyapprox.cython.univariate_quadrature",
         "sources": [
-            "pyapprox/cython/univariate_quadrature.pyx"
+            "pyapprox/cython\\univariate_quadrature.pyx"
         ]
     },
     "module_name": "pyapprox.cython.univariate_quadrature"
@@ -832,7 +832,7 @@ static const char *__pyx_filename;
 
 
 static const char *__pyx_f[] = {
-  "pyapprox/cython/univariate_quadrature.pyx",
+  "pyapprox\\cython\\univariate_quadrature.pyx",
   "stringsource",
 };
 /* MemviewSliceStruct.proto */
