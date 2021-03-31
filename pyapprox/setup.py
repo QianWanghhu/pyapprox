@@ -43,6 +43,7 @@ setuptools.setup(
     test_suite='nose.collector',
     tests_require=['nose'],
     license='MIT',
+    include_dirs=[np.get_include()]
 )
 
 # mshr needed for test_helmholtz consider removing as required dependency
