@@ -416,7 +416,7 @@ def adaptive_approximate(fun, variable, method, options=None):
 
 def approximate_polynomial_chaos(train_samples, train_vals, verbosity=0,
                                  basis_type='expanding_basis',
-                                 variable=None, options=None):
+                                 variable=None, options=None, poly_opts=None):
     r"""
     Compute a Polynomial Chaos Expansion of a function from a fixed data set.
 
@@ -442,6 +442,10 @@ def approximate_polynomial_chaos(train_samples, train_vals, verbosity=0,
     verbosity : integer
         Controls the amount of information printed to screen
 
+    poly_opts : dictionary
+        Dictionary definining the custom configuration of the polynomial
+        chaos expansion basis. See :func:`pyapprox.multivariate_polynomials.PolynomialChaosExpansion.configure`
+
     Returns
     -------
     result : :class:`pyapprox.approximate.ApproximateResult`
@@ -465,10 +469,11 @@ def approximate_polynomial_chaos(train_samples, train_vals, verbosity=0,
 
     from pyapprox.multivariate_polynomials import PolynomialChaosExpansion, \
         define_poly_options_from_variable_transformation
-    var_trans = AffineRandomVariableTransformation(variable)
     poly = PolynomialChaosExpansion()
-    poly_opts = define_poly_options_from_variable_transformation(
-        var_trans)
+    if poly_opts is None:
+        var_trans = AffineRandomVariableTransformation(variable)
+        poly_opts = define_poly_options_from_variable_transformation(
+            var_trans)
     poly.configure(poly_opts)
 
     if options is None:
@@ -552,12 +557,14 @@ class LinearLeastSquaresCV(LinearModel):
         if y.ndim == 1:
             y = y[:, None]
         assert y.shape[1] == 1
-        fold_sample_indices = get_random_k_fold_sample_indices(
-            X.shape[0], self.cv, self.random_folds)
-        results = []
-        for ii in range(len(self.alphas)):
-            results.append(leave_many_out_lsq_cross_validation(
-                X, y, fold_sample_indices, self.alphas[ii]))
+        if self.cv != y.shape[0]:
+            fold_sample_indices = get_random_k_fold_sample_indices(
+                X.shape[0], self.cv, self.random_folds)
+            results = [leave_many_out_lsq_cross_validation(
+                X, y, fold_sample_indices, alpha) for alpha in self.alphas]
+        else:
+            results = [leave_one_out_lsq_cross_validation(
+                X, y, alpha) for alpha in self.alphas]
         cv_scores = [r[1] for r in results]
         ii_best_alpha = np.argmin(cv_scores)
 
@@ -579,7 +586,7 @@ def fit_linear_model(basis_matrix, train_vals, solver_type, **kwargs):
                'lasso_grad': [LassoCV, Lasso],
                'lars': [LarsCV, Lars],
                'omp': [OrthogonalMatchingPursuitCV, OrthogonalMatchingPursuit],
-               'lstsq': [LinearLeastSquaresCV,LinearLeastSquares]}
+               'lstsq': [LinearLeastSquaresCV, LinearLeastSquares]}
 
     if not solver_type in solvers:
         msg = f'Solver type {solver_type} not supported\n'
@@ -717,6 +724,7 @@ def cross_validate_pce_degree(
         - 'lars'
         - 'lasso_grad'
         - 'omp'
+        - 'lstsq'
 
     verbose : integer
         Controls the amount of information printed to screen
@@ -906,6 +914,7 @@ def expanding_basis_pce(pce, train_samples, train_vals, hcross_strength=1,
         - 'lars'
         - 'lasso_grad'
         - 'omp'
+        - 'lstsq'
 
     verbose : integer
         Controls the amount of information printed to screen
@@ -1051,10 +1060,11 @@ def _expanding_basis_pce(pce, train_samples, train_vals, hcross_strength=1,
             num_expansion_steps_iter = 0
             indices = restrict_basis(
                 pce.indices, pce.coefficients, restriction_tol)
-            msg = f'Expanding {pce.indices.shape[1]} terms'
+            msg = f'Expanding {indices.shape[1]} restricted from '
+            msg += f'{pce.indices.shape[1]} terms'
             while ((num_expansion_steps_iter < current_max_num_expansion_steps_iter)):
-                new_indices = expand_basis(pce.indices)
-                pce.set_indices(np.hstack([pce.indices, new_indices]))
+                new_indices = expand_basis(indices)
+                pce.set_indices(np.hstack([indices, new_indices]))
                 num_terms = pce.num_terms()
                 num_expansion_steps_iter += 1
             msg += f' New number of terms {pce.indices.shape[1]}'
@@ -1154,6 +1164,7 @@ def approximate_fixed_pce(pce, train_samples, train_vals, indices,
         - 'lars'
         - 'lasso_grad'
         - 'omp'
+        - 'lstsq'
 
     verbose : integer
         Controls the amount of information printed to screen
@@ -1282,7 +1293,7 @@ def approximate_gaussian_process(train_samples, train_vals, nu=np.inf,
 
 
 from pyapprox.utilities import get_random_k_fold_sample_indices, \
-    leave_many_out_lsq_cross_validation
+    leave_many_out_lsq_cross_validation, leave_one_out_lsq_cross_validation
 def cross_validate_approximation(
         train_samples, train_vals, options, nfolds, method, random_folds=True):
     ntrain_samples = train_samples.shape[1]
