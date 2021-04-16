@@ -15,9 +15,10 @@ from pyapprox.univariate_quadrature import clenshaw_curtis_rule_growth
 from pyapprox.variables import is_bounded_continuous_variable
 import numpy as np
 from pyapprox.adaptive_sparse_grid import variance_refinement_indicator, \
-    CombinationSparseGrid, \
+    CombinationSparseGrid, constant_increment_growth_rule, \
     get_sparse_grid_univariate_leja_quadrature_rules_economical, \
-    max_level_admissibility_function
+    max_level_admissibility_function, get_unique_max_level_1d, \
+    get_unique_quadrule_variables
 from pyapprox.variables import IndependentMultivariateRandomVariable
 from pyapprox.variable_transformations import AffineRandomVariableTransformation
 from functools import partial
@@ -40,7 +41,7 @@ def adaptive_approximate_sparse_grid(
     Parameters
     ----------
     fun : callable
-        The function to be minimized
+        The function to be approximated
 
         ``fun(z) -> np.ndarray``
 
@@ -74,7 +75,7 @@ def adaptive_approximate_sparse_grid(
         the error.
 
     univariate_quad_rule_info : list
-        List containing two entries. The first entry is a list 
+        List containing four entries. The first entry is a list 
         (or single callable) of univariate quadrature rules for each variable
         with signature
 
@@ -94,6 +95,17 @@ def adaptive_approximate_sparse_grid(
 
         If either entry is a callable then the same quad or growth rule is 
         applied to every variable.
+
+        The third entry is a list of np.ndarray (or single scalar) specifying
+        the variable dimensions that each unique quadrature rule is applied to.
+
+        The forth entry is a list which specifies the maximum level of each
+        unique quadrature rule. If None then max_level is assumed to be np.inf 
+        for each quadrature rule. If a scalar then the same value is applied
+        to all quadrature rules. This entry is useful for certain quadrature
+        rules, e.g. Gauss Patterson, or Leja sequences for bounded discrete
+        variables where there is a limit on the number of levels that can be 
+        used
 
     max_nsamples : float
         If ``cost_function==None`` then this argument is the maximum number of 
@@ -158,17 +170,38 @@ def adaptive_approximate_sparse_grid(
     if config_var_trans is not None:
         nvars += config_var_trans.num_vars()
     sparse_grid = CombinationSparseGrid(nvars)
-    if univariate_quad_rule_info is None:
-        quad_rules, growth_rules, unique_quadrule_indices = \
-            get_sparse_grid_univariate_leja_quadrature_rules_economical(
-                var_trans)
-    else:
-        quad_rules, growth_rules = univariate_quad_rule_info
-        unique_quadrule_indices = None
+
     if max_level_1d is None:
         max_level_1d = [np.inf]*nvars
     elif np.isscalar(max_level_1d):
         max_level_1d = [max_level_1d]*nvars
+    
+    if univariate_quad_rule_info is None:
+        quad_rules, growth_rules, unique_quadrule_indices, \
+            unique_max_level_1d = \
+                get_sparse_grid_univariate_leja_quadrature_rules_economical(
+                    var_trans, method='pdf')
+        # Some quadrature rules have max_level enforce this here
+        for ii in range(len(unique_quadrule_indices)):
+            for ind in unique_quadrule_indices[ii]:
+                max_level_1d[ind] = min(
+                    max_level_1d[ind], unique_max_level_1d[ii])
+    else:
+        quad_rules, growth_rules, unique_quadrule_indices, \
+            unique_max_level_1d = univariate_quad_rule_info
+        if unique_max_level_1d is None:
+            max_level_1d = np.minimum([np.inf]*nvars, max_level_1d)
+        elif np.isscalar(unique_max_level_1d):
+            max_level_1d = np.minimum(
+                [unique_max_level_1d]*nvars, max_level_1d)
+        else:
+            nunique_vars = len(quad_rules)
+            assert len(unique_max_level_1d) == nunique_vars
+            for ii in range(nunique_vars):
+                for jj in unique_quadrule_indices[ii]:
+                    max_level_1d[jj] = np.minimum(
+                        unique_max_level_1d[ii], max_level_1d[jj])
+        
     assert len(max_level_1d) == nvars
     admissibility_function = partial(
         max_level_admissibility_function, np.inf, max_level_1d, max_nsamples,
@@ -187,7 +220,8 @@ def adaptive_approximate_polynomial_chaos(
         fun, univariate_variables, callback=None,
         refinement_indicator=variance_pce_refinement_indicator,
         growth_rules=None, max_nsamples=100, tol=0, verbose=0,
-        ncandidate_samples=1e4, generate_candidate_samples=None):
+        ncandidate_samples=1e4, generate_candidate_samples=None,
+        max_level_1d=None):
     r"""
     Compute an adaptive Polynomial Chaos Expansion of a function.
 
@@ -261,6 +295,10 @@ def adaptive_approximate_polynomial_chaos(
 
         The output is a 2D np.ndarray with size(nvars,ncandidate_samples)
 
+    max_level_1d : np.ndarray (nvars)
+        The maximum level of the sparse grid in each dimension. If None
+        There is no limit
+
     Returns
     -------
     result : :class:`pyapprox.approximate.ApproximateResult`
@@ -278,11 +316,14 @@ def adaptive_approximate_polynomial_chaos(
     for rv in univariate_variables:
         if not is_bounded_continuous_variable(rv):
             bounded_variables = False
-            msg = "For now leja sampling based PCE is only supported for bounded continouous random variablesfor now leja sampling based PCE is only supported for bounded continouous random variables"
+            msg = "For now leja sampling based PCE is only supported for "
+            msg += " bounded continouous random variables when"
+            msg += " generate_candidate_samples is not provided."
             if generate_candidate_samples is None:
                 raise Exception(msg)
             else:
                 break
+
     if generate_candidate_samples is None:
         # Todo implement default for non-bounded variables that uses induced
         # sampling
@@ -295,19 +336,214 @@ def adaptive_approximate_polynomial_chaos(
     else:
         candidate_samples = generate_candidate_samples(ncandidate_samples)
 
+    if max_level_1d is None:
+        max_level_1d = [np.inf]*nvars
+    elif np.isscalar(max_level_1d):
+        max_level_1d = [max_level_1d]*nvars
+
     pce = AdaptiveLejaPCE(
         nvars, candidate_samples, factorization_type='fast')
     pce.verbose = verbose
-    admissibility_function = partial(
-        max_level_admissibility_function, np.inf, [np.inf]*nvars, max_nsamples,
-        tol, verbose=verbose)
     pce.set_function(fun, var_trans)
     if growth_rules is None:
-        growth_rules = clenshaw_curtis_rule_growth
+        growth_incr = 2
+        growth_rules = partial(constant_increment_growth_rule, growth_incr)
+    assert callable(growth_rules)    
+    unique_quadrule_variables, unique_quadrule_indices = \
+        get_unique_quadrule_variables(var_trans)
+    growth_rules = [growth_rules]*len(unique_quadrule_indices)
+
+    admissibility_function = None# provide after growth_rules have been added
     pce.set_refinement_functions(
-        refinement_indicator, admissibility_function, growth_rules)
+        refinement_indicator, admissibility_function, growth_rules,
+        unique_quadrule_indices=unique_quadrule_indices)
+
+    unique_max_level_1d = get_unique_max_level_1d(
+        var_trans, pce.compact_univariate_growth_rule)
+    nunique_vars = len(unique_quadrule_indices)
+    assert len(unique_max_level_1d) == nunique_vars
+    for ii in range(nunique_vars):
+        for jj in unique_quadrule_indices[ii]:
+            max_level_1d[jj] = np.minimum(
+                unique_max_level_1d[ii], max_level_1d[jj])
+
+    admissibility_function = partial(
+        max_level_admissibility_function, np.inf, max_level_1d, max_nsamples,
+        tol, verbose=verbose)
+    pce.admissibility_function = admissibility_function
+    
     pce.build(callback)
     return ApproximateResult({'approx': pce})
+
+
+def adaptive_approximate_gaussian_process(
+        fun, univariate_variables, callback=None,
+        max_nsamples=100, verbose=0, ncandidate_samples=1e4,
+        checkpoints=None, nu=np.inf, n_restarts_optimizer=1, 
+        normalize_y=False, alpha=0,
+        noise_level=None, noise_level_bounds='fixed',
+        kernel_variance=None,
+        kernel_variance_bounds='fixed',
+        length_scale=1,
+        length_scale_bounds=(1e-2, 10),
+        generate_candidate_samples=None,
+        weight_function=None):
+    r"""
+    Adaptively construct a Gaussian process approximation of a function using 
+    weighted-pivoted-Cholesky sampling and the Matern kernel
+
+    .. math::
+
+       k(z_i, z_j) =  \frac{1}{\Gamma(\nu)2^{\nu-1}}\Bigg(
+       \frac{\sqrt{2\nu}}{l} \lVert z_i - z_j \rVert_2\Bigg)^\nu K_\nu\Bigg(
+       \frac{\sqrt{2\nu}}{l} \lVert z_i - z_j \rVert_2\Bigg)
+
+    where :math:`\lVert \cdot \rVert_2` is the Euclidean distance, 
+    :math:`\Gamma(\cdot)` is the gamma function, :math:`K_\nu(\cdot)` is the 
+    modified Bessel function.
+
+    Starting from an initial guess, the algorithm learns the kernel length 
+    scale as more training data is collected.
+
+    Parameters
+    ----------
+    fun : callable
+        The function to be approximated
+
+        ``fun(z) -> np.ndarray``
+
+        where ``z`` is a 2D np.ndarray with shape (nvars,nsamples) and the
+        output is a 2D np.ndarray with shape (nsamples,nqoi)
+
+    univariate_variables : list
+        A list of scipy.stats random variables of size (nvars)
+
+    callback : callable
+        Function called after each iteration with the signature
+
+        ``callback(approx_k)``
+
+        where approx_k is the current approximation object.
+
+    nu : string
+        The parameter :math:`\nu` of the Matern kernel. When :math:`\nu\to\inf`
+        the Matern kernel is equivalent to the squared-exponential kernel.
+
+    checkpoints : iterable
+        The set of points at which the length scale of the kernel will be 
+        recomputed and new training data obtained. If None then
+        ``checkpoints = np.linspace(10, max_nsamples, 10).astype(int)``
+
+    max_nsamples : float
+        The maximum number of evaluations of fun. If fun has configure variables.
+
+    ncandidate_samples : integer
+        The number of candidate samples used to select the training samples 
+        The final training samples will be a subset of these samples.
+
+    alpha : float
+        Nugget added to diagonal of the covariance kernel evaluated at 
+        the training data. Used to improve numerical conditionining. This
+        parameter is different to noise_level which applies to both training
+        and test data
+
+    normalize_y : bool
+        True - normalize the training values to have zero mean and unit variance
+
+    length_scale : float
+        The initial length scale used to generate the first batch of training 
+        samples
+
+    length_scale_bounds : tuple (2)
+        The lower and upper bound on length_scale used in optimization of
+        the Gaussian process hyper-parameters
+
+    noise_level : float
+        The noise_level used when training the GP
+
+    noise_level_bounds : tuple (2)
+        The lower and upper bound on noise_level used in optimization of
+        the Gaussian process hyper-parameters
+
+    kernel_variance : float
+        The kernel_variance used when training the GP
+
+    noise_level_bounds : tuple (2)
+        The lower and upper bound on kernel_variance used in optimization of
+        the Gaussian process hyper-parameters
+
+    n_restarts_optimizer : int
+        The number of local optimizeation problems solved to find the 
+        GP hyper-parameters
+
+    verbose : integer
+        Controls the amount of information printed to screen
+
+    generate_candidate_samples : callable
+        A function that generates the candidate samples used to build the Leja
+        sequence with signature
+
+        ``generate_candidate_samples(ncandidate_samples) -> np.ndarray``
+
+        The output is a 2D np.ndarray with size(nvars,ncandidate_samples)
+
+    weight_function : callable
+        Function used to precondition kernel with the signature
+
+        ``weight_function(samples) -> np.ndarray (num_samples)``
+
+        where samples is a np.ndarray (num_vars,num_samples)
+
+    Returns
+    -------
+    result : :class:`pyapprox.approximate.ApproximateResult`
+         Result object with the following attributes
+
+    approx : :class:`pyapprox.gaussian_process.AdaptiveGaussianProcess`
+        The Gaussian process
+    """
+    
+    variable = IndependentMultivariateRandomVariable(
+        univariate_variables)
+    var_trans = AffineRandomVariableTransformation(variable)
+    nvars = var_trans.num_vars()
+    
+    kernel = __setup_gaussian_process_kernel(
+        nvars, length_scale, length_scale_bounds,
+        kernel_variance, kernel_variance_bounds,
+        noise_level, noise_level_bounds, nu)
+    
+    from pyapprox.gaussian_process import AdaptiveGaussianProcess, \
+        CholeskySampler
+
+    sampler = CholeskySampler(
+        nvars, ncandidate_samples, var_trans.variable,
+        gen_candidate_samples=generate_candidate_samples)
+    sampler_kernel = copy.deepcopy(kernel)
+    sampler.set_kernel(sampler_kernel)
+    sampler.set_weight_function(weight_function)
+
+    gp = AdaptiveGaussianProcess(
+        kernel, n_restarts_optimizer=n_restarts_optimizer, alpha=alpha)
+    gp.setup(fun, sampler)
+
+    if checkpoints is None:
+        checkpoints = np.linspace(10, max_nsamples, 10).astype(int)
+    assert checkpoints[-1] <= max_nsamples
+    
+    nsteps = len(checkpoints)
+    for kk in range(nsteps):
+        chol_flag = gp.refine(checkpoints[kk])
+        gp.sampler.set_kernel(copy.deepcopy(gp.kernel_))
+        if callback is not None:
+            callback(gp)
+        if chol_flag != 0:
+            msg = 'Cannot add additional samples, Kernel is now ill conditioned'
+            msg += '. If more samples are really required increase alpha or'
+            msg += ' manually fix kernel_length to a smaller value'
+            print('Exiting: ' + msg)
+            break
+    return ApproximateResult({'approx': gp})
 
 
 def compute_l2_error(f, g, variable, nsamples, rel=False):
@@ -398,10 +634,13 @@ def adaptive_approximate(fun, variable, method, options=None):
          - :func:`pyapprox.approximate.adaptive_approximate_sparse_grid` 
 
          - :func:`pyapprox.approximate.adaptive_approximate_polynomial_chaos`
+
+         - :func:`pyapprox.approximate.adaptive_approximate_gaussian_process`
     """
 
     methods = {'sparse_grid': adaptive_approximate_sparse_grid,
-               'polynomial_chaos': adaptive_approximate_polynomial_chaos}
+               'polynomial_chaos': adaptive_approximate_polynomial_chaos,
+               'gaussian_process': adaptive_approximate_gaussian_process}
 
     if method not in methods:
         msg = f'Method {method} not found.\n Available methods are:\n'
@@ -604,7 +843,7 @@ def fit_linear_model(basis_matrix, train_vals, solver_type, **kwargs):
     assert train_vals.ndim == 2
     assert train_vals.shape[1] == 1
 
-    # The following co,ment and two conditional statements are only true
+    # The following comment and two conditional statements are only true
     # for lars which I have switched off.
     
     # cv interpolates each residual onto a common set of alphas
@@ -1212,6 +1451,30 @@ def approximate_fixed_pce(pce, train_samples, train_vals, indices,
     return ApproximateResult({'approx': pce})
 
 
+def __setup_gaussian_process_kernel(nvars, length_scale, length_scale_bounds,
+                                   kernel_variance, kernel_variance_bounds,
+                                   noise_level, noise_level_bounds, nu):
+    from sklearn.gaussian_process.kernels import Matern, WhiteKernel, \
+        ConstantKernel
+    if np.isscalar(length_scale):
+        length_scale = np.array([length_scale]*nvars)
+    assert length_scale.shape[0] == nvars
+    kernel = Matern(length_scale, length_scale_bounds=length_scale_bounds,
+                    nu=nu)
+    # optimize variance
+    if kernel_variance is not None:
+        kernel = ConstantKernel(
+            constant_value=kernel_variance,
+            constant_value_bounds=kernel_variance_bounds)*kernel
+    # optimize gp noise
+    if noise_level is not None:
+        kernel += WhiteKernel(
+            noise_level, noise_level_bounds=noise_level_bounds)
+    # Note noise_level is different to alpha
+    # noise_kernel applies nugget to both training and test data
+    # alpha only applies it to training data
+    return kernel
+
 def approximate_gaussian_process(train_samples, train_vals, nu=np.inf,
                                  n_restarts_optimizer=5, verbose=0,
                                  normalize_y=False, alpha=0,
@@ -1243,9 +1506,40 @@ def approximate_gaussian_process(train_samples, train_vals, nu=np.inf,
     train_vals : np.ndarray (nvars, 1)
         The values of the function at ``train_samples``
 
-    kernel_nu : string
+    nu : string
         The parameter :math:`\nu` of the Matern kernel. When :math:`\nu\to\inf`
         the Matern kernel is equivalent to the squared-exponential kernel.
+
+    alpha : float
+        Nugget added to diagonal of the covariance kernel evaluated at 
+        the training data. Used to improve numerical conditionining. This
+        parameter is different to noise_level which applies to both training
+        and test data
+
+    normalize_y : bool
+        True - normalize the training values to have zero mean and unit variance
+
+    length_scale : float
+        The initial length scale used to generate the first batch of training 
+        samples
+
+    length_scale_bounds : tuple (2)
+        The lower and upper bound on length_scale used in optimization of
+        the Gaussian process hyper-parameters
+
+    noise_level : float
+        The noise_level used when training the GP
+
+    noise_level_bounds : tuple (2)
+        The lower and upper bound on noise_level used in optimization of
+        the Gaussian process hyper-parameters
+
+    kernel_variance : float
+        The kernel_variance used when training the GP
+
+    noise_level_bounds : tuple (2)
+        The lower and upper bound on kernel_variance used in optimization of
+        the Gaussian process hyper-parameters
 
     n_restarts_optimizer : int
         The number of local optimizeation problems solved to find the 
@@ -1262,27 +1556,13 @@ def approximate_gaussian_process(train_samples, train_vals, nu=np.inf,
     approx : :class:`pyapprox.gaussian_process.GaussianProcess`
         The Gaussian process
     """
-    from sklearn.gaussian_process.kernels import Matern, WhiteKernel, \
-        ConstantKernel
     from pyapprox.gaussian_process import GaussianProcess
     nvars = train_samples.shape[0]
-    if np.isscalar(length_scale):
-        length_scale = np.array([length_scale]*nvars)
-    assert length_scale.shape[0] == nvars
-    kernel = Matern(length_scale, length_scale_bounds=length_scale_bounds,
-                    nu=nu)
-    # optimize variance
-    if kernel_variance is not None:
-        kernel = ConstantKernel(
-            constant_value=kernel_variance,
-            constant_value_bounds=kernel_variance_bounds)*kernel
-    # optimize gp noise
-    if noise_level is not None:
-        kernel += WhiteKernel(
-            noise_level, noise_level_bounds=noise_level_bounds)
-    # Note noise_level is different to alpha
-    # noise_kernel applies nugget to both training and test data
-    # alpha only applies it to training data
+    kernel = __setup_gaussian_process_kernel(
+        nvars, length_scale, length_scale_bounds,
+        kernel_variance, kernel_variance_bounds,
+        noise_level, noise_level_bounds, nu)
+    
     gp = GaussianProcess(kernel, n_restarts_optimizer=n_restarts_optimizer,
                          normalize_y=normalize_y, alpha=alpha)
     

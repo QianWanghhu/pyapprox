@@ -21,7 +21,8 @@ from pyapprox.variables import get_distribution_info
 from pyapprox.numerically_generate_orthonormal_polynomials_1d import \
     modified_chebyshev_orthonormal, predictor_corrector_known_scipy_pdf, \
     predictor_corrector_function_of_independent_variables, \
-    predictor_corrector_product_of_functions_of_independent_variables
+    predictor_corrector_product_of_functions_of_independent_variables, \
+    lanczos, predictor_corrector
 from pyapprox.orthonormal_polynomials_1d import \
     discrete_chebyshev_recurrence
 
@@ -549,7 +550,7 @@ def get_recursion_coefficients(
     # variables that require numerically generated polynomials with
     # predictor corrector method
     from scipy import stats
-    predcorr_rv_dict = {'gumbel_r': stats.gumbel_r, 'lognorm': stats.lognorm}
+    from scipy.stats import _continuous_distns
 
     poly_type = opts.get('poly_type', None)
     var_type = None
@@ -565,6 +566,9 @@ def get_recursion_coefficients(
         recursion_coeffs = hermite_recurrence(
             num_coefs, rho=0., probability=True)
     elif poly_type == 'krawtchouk' or var_type == 'binom':
+        # although bounded the krwatchouk polynomials are not defined
+        # on the canonical domain [-1,1] but rather the user and
+        # canconical domain are the same
         if poly_type is None:
             opts = opts['shapes']
         n, p = opts['n'], opts['p']
@@ -572,6 +576,9 @@ def get_recursion_coefficients(
         recursion_coeffs = krawtchouk_recurrence(
             num_coefs, n, p)
     elif poly_type == 'hahn' or var_type == 'hypergeom':
+        # although bounded the hahn polynomials are not defined
+        # on the canonical domain [-1,1] but rather the user and
+        # canconical domain are the same
         if poly_type is not None:
             apoly, bpoly = opts['alpha_poly'], opts['beta_poly']
             N = opts['N']
@@ -580,7 +587,11 @@ def get_recursion_coefficients(
             apoly, bpoly = -(n+1), -M-1+n
         num_coefs = min(num_coefs, N)
         recursion_coeffs = hahn_recurrence(num_coefs, N, apoly, bpoly)
+        xk = np.arange(max(0, N-M+n), min(n, N)+1, dtype=float)
     elif poly_type == 'discrete_chebyshev' or var_type == 'discrete_chebyshev':
+        # although bounded the discrete_chebyshev polynomials are not defined
+        # on the canonical domain [-1,1] but rather the user and
+        # canconical domain are the same
         if poly_type is not None:
             N = opts['N']
         else:
@@ -593,14 +604,15 @@ def get_recursion_coefficients(
         if poly_type is None:
             opts = opts['shapes']
         xk, pk = opts['xk'], opts['pk']
-        # shapes['xk'] will be in [0,1] but canonical domain is [-1,1]
+        # shapes['xk'] will be in [0, 1] but canonical domain is [-1, 1]
         xk = xk*2-1
         assert xk.min() >= -1 and xk.max() <= 1
         if num_coefs > xk.shape[0]:
             msg = 'Number of coefs requested is larger than number of '
             msg += 'probability masses'
             raise Exception(msg)
-        recursion_coeffs = modified_chebyshev_orthonormal(num_coefs, [xk, pk])
+        #recursion_coeffs = modified_chebyshev_orthonormal(num_coefs, [xk, pk])
+        recursion_coeffs = lanczos(xk, pk, num_coefs)
         p = evaluate_orthonormal_polynomial_1d(
             np.asarray(xk, dtype=float), num_coefs-1, recursion_coeffs)
         error = np.absolute((p.T*pk).dot(p)-np.eye(num_coefs)).max()
@@ -618,8 +630,12 @@ def get_recursion_coefficients(
             msg = 'Number of coefs requested is larger than number of '
             msg += 'samples'
             raise Exception(msg)
-        print(num_coefs)
-        recursion_coeffs = modified_chebyshev_orthonormal(num_coefs, [xk, pk])
+        #print(num_coefs)
+        #recursion_coeffs = modified_chebyshev_orthonormal(num_coefs, [xk, pk])
+        #recursion_coeffs = lanczos(xk, pk, num_coefs)
+        recursion_coeffs = predictor_corrector(
+            num_coefs, (xk, pk), xk.min(), xk.max(),
+            interval_size=xk.max()-xk.min())
         p = evaluate_orthonormal_polynomial_1d(
             np.asarray(xk, dtype=float), num_coefs-1, recursion_coeffs)
         error = np.absolute((p.T*pk).dot(p)-np.eye(num_coefs)).max()
@@ -630,13 +646,13 @@ def get_recursion_coefficients(
             raise Exception(msg)
     elif poly_type == 'monomial':
         recursion_coeffs = None
-    elif var_type in predcorr_rv_dict:
+    elif var_type in _continuous_distns._distn_names:
         quad_options = {
             'nquad_samples': 10,
             'atol': numerically_generated_poly_accuracy_tolerance,
             'rtol': numerically_generated_poly_accuracy_tolerance,
             'max_steps': 10000, 'verbose': 0}
-        rv = predcorr_rv_dict[var_type](**opts['shapes'])
+        rv = getattr(stats, var_type)(**opts['shapes'])
         recursion_coeffs = predictor_corrector_known_scipy_pdf(
             num_coefs, rv, quad_options)
     elif poly_type == 'function_indpnt_vars':
@@ -667,8 +683,9 @@ def candidate_based_christoffel_leja_rule_1d(
 
     from pyapprox.polynomial_sampling import christoffel_weights
 
-    def generate_basis_matrix(x): return evaluate_orthonormal_polynomial_deriv_1d(
-        x[0, :], num_leja_samples, recursion_coeffs, deriv_order=0)
+    def generate_basis_matrix(x):
+        return evaluate_orthonormal_polynomial_deriv_1d(
+            x[0, :], num_leja_samples, recursion_coeffs, deriv_order=0)
 
     def weight_function(x): return christoffel_weights(
         generate_basis_matrix(x))
@@ -803,7 +820,8 @@ def get_pdf_weight_functions(variable):
 
 def univariate_pdf_weighted_leja_quadrature_rule(
         variable, growth_rule, level, return_weights_for_all_levels=True,
-        initial_points=None):
+        initial_points=None,
+        numerically_generated_poly_accuracy_tolerance=1e-12):
     """
     Return the samples and weights of the Leja quadrature rule for any 
     continuous variable using the PDF of the random variable as the 
@@ -851,7 +869,8 @@ def univariate_pdf_weighted_leja_quadrature_rule(
     opts = {'rv_type': name, 'shapes': shapes,
             'var_nums': variable}
     max_nsamples = growth_rule(level)
-    ab = get_recursion_coefficients(opts, max_nsamples+1)
+    ab = get_recursion_coefficients(
+        opts, max_nsamples+1, numerically_generated_poly_accuracy_tolerance)
     basis_fun = partial(evaluate_orthonormal_polynomial_deriv_1d, ab=ab)
 
     pdf, pdf_jac = get_pdf_weight_functions(variable)
@@ -890,55 +909,27 @@ def univariate_pdf_weighted_leja_quadrature_rule(
     return leja_sequence[0, :], ordered_weights_1d
 
 
-def get_discrete_univariate_leja_quadrature_rule(variable, growth_rule, initial_points=None):
-    var_type, __, shapes = get_distribution_info(variable)
-    if var_type == 'binom':
+def get_discrete_univariate_leja_quadrature_rule(variable, growth_rule, initial_points=None, numerically_generated_poly_accuracy_tolerance=1e-12):
+    from pyapprox.variables import get_probability_masses, \
+        is_bounded_discrete_variable
+    var_name, scales, shapes = get_distribution_info(variable)
+    if is_bounded_discrete_variable(variable):
         if initial_points is None:
-            initial_points = np.atleast_2d(
-                [binomial_rv.ppf(0.5, num_trials, prob_success)])
-        num_trials = variable_parameters['num_trials']
-        prob_success = variable_parameters['prob_success']
+            initial_points = np.atleast_2d([variable.ppf(0.5)])
 
+        xk, pk = get_probability_masses(variable)
         def generate_candidate_samples(num_samples):
-            assert num_samples == num_trials+1
-            return np.arange(0, num_trials+1)[np.newaxis, :]
-        recursion_coeffs = krawtchouk_recurrence(
-            num_trials, num_trials, probability=True)
+            return xk[None, :]
+        opts = {'rv_type': var_name, 'shapes': shapes}
+        recursion_coeffs = get_recursion_coefficients(
+            opts, xk.shape[0],
+            numerically_generated_poly_accuracy_tolerance=numerically_generated_poly_accuracy_tolerance)
         quad_rule = partial(
             candidate_based_christoffel_leja_rule_1d, recursion_coeffs,
-            generate_candidate_samples, num_trials+1, growth_rule=growth_rule,
+            generate_candidate_samples, xk.shape[0], growth_rule=growth_rule,
             initial_points=initial_points)
-    elif var_type == 'float_rv_discrete' or var_type == 'discrete_chebyshev':
-        nmasses = shapes['xk'].shape[0]
-        if var_type == 'discrete_chebyshev':
-            xk = shapes['xk']  # do not map discrete_chebyshev
-            assert np.allclose(shapes['xk'], np.arange(nmasses))
-            assert np.allclose(shapes['pk'], np.ones(nmasses)/nmasses)
-            num_coefs = nmasses
-            recursion_coeffs = discrete_chebyshev_recurrence(
-                num_coefs, nmasses)
-        else:
-            # shapes['xk'] will be in [0,1] but canonical domain is [-1,1]
-            xk = shapes['xk']*2-1
-            num_coefs = nmasses
-            recursion_coeffs = modified_chebyshev_orthonormal(
-                num_coefs, [xk, shapes['pk']])
-
-        def generate_candidate_samples(num_samples):
-            assert num_samples == nmasses
-            return xk[np.newaxis, :]
-
-        # do not specify init_samples in partial or a sparse grid cannot
-        # update the samples_1d so that next level has same samples_1d
-        # TODO: add test that samples_1d[ii] and samples_1d[ii+1] subset
-        # are equal
-        #init_samples = np.atleast_2d(np.sort(xk)[nmasses//2])
-        quad_rule = partial(
-            candidate_based_christoffel_leja_rule_1d, recursion_coeffs,
-            generate_candidate_samples, nmasses,
-            growth_rule=growth_rule, initial_points=initial_points)
     else:
-        raise Exception('var_type %s not implemented' % var_type)
+        raise Exception('var_name %s not implemented' % var_name)
     return quad_rule
 
 
@@ -951,7 +942,9 @@ def get_univariate_leja_quadrature_rule(
 
     if not is_continuous_variable(variable):
         return get_discrete_univariate_leja_quadrature_rule(
-            variable, growth_rule, initial_points=initial_points)
+            variable, growth_rule,
+            numerically_generated_poly_accuracy_tolerance=numerically_generated_poly_accuracy_tolerance,
+            initial_points=initial_points)
 
     if method == 'christoffel':
         return partial(
@@ -959,24 +952,27 @@ def get_univariate_leja_quadrature_rule(
             numerically_generated_poly_accuracy_tolerance=numerically_generated_poly_accuracy_tolerance, initial_points=initial_points)
 
     if method == 'pdf':
-        return partial(univariate_pdf_weighted_leja_quadrature_rule,
-                       variable, growth_rule, initial_points=initial_points)
+        return partial(
+            univariate_pdf_weighted_leja_quadrature_rule,
+            variable, growth_rule,
+            numerically_generated_poly_accuracy_tolerance=numerically_generated_poly_accuracy_tolerance,
+            initial_points=initial_points)
 
     assert method == 'deprecated'
-    var_type, __, shapes = get_distribution_info(variable)
-    if var_type == 'uniform':
+    var_name, __, shapes = get_distribution_info(variable)
+    if var_name == 'uniform':
         quad_rule = partial(
             beta_leja_quadrature_rule, 1, 1, growth_rule=growth_rule,
             samples_filename=None)
-    elif var_type == 'beta':
+    elif var_name == 'beta':
         quad_rule = partial(
             beta_leja_quadrature_rule, shapes['a'], shapes['b'],
             growth_rule=growth_rule)
-    elif var_type == 'norm':
+    elif var_name == 'norm':
         quad_rule = partial(
             gaussian_leja_quadrature_rule, growth_rule=growth_rule)
     else:
-        raise Exception('var_type %s not implemented' % var_type)
+        raise Exception('var_name %s not implemented' % var_name)
 
     return quad_rule
 

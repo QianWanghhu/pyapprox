@@ -20,9 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-#        os: [ubuntu-latest]
+        os: [ubuntu-latest]
         python-version: [3.6]
-        os: [ubuntu-latest, macos-10.14]
+#        os: [ubuntu-latest, macos-10.14]
 #        fenics is not available for windows so do not test
 #        python-version: [3.6, 3.7, 3.8]
 
@@ -33,10 +33,11 @@ jobs:
       with:
         activate-environment: pyapprox-base
         python-version: ${{ matrix.python-version }}
-        channels: defaults,conda-forge
+#        channels: defaults,conda-forge
+        channels: defaults
         environment-file: environment.yml
         auto-update-conda: true
-#       use-only-tar-bz2: true
+#        use-only-tar-bz2: true
         auto-activate-base: false
     - name: Conda list
       shell: bash -l {0} # - l {0} is needed to activate created env

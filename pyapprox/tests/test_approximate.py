@@ -25,6 +25,28 @@ class TestApproximate(unittest.TestCase):
             nsamples)
         assert error < 1e-12
 
+    def test_approximate_sparse_grid_discrete(self):
+        def fun(samples):
+            return np.cos(samples.sum(axis=0)/20)[:, None]
+        nvars = 2
+        univariate_variables = [stats.binom(20, 0.5)]*nvars
+        approx = adaptive_approximate(
+            fun, univariate_variables, 'sparse_grid').approx
+        nsamples = 100
+        error = compute_l2_error(
+            approx, fun, approx.variable_transformation.variable,
+            nsamples)
+        assert error < 1e-12
+        # check leja samples are nested. Sparse grid uses christoffel
+        # leja sequence that does not change preconditioner everytime
+        # lu pivot is performed, but we can still enforce nestedness
+        # by specifiying initial points. This tests make sure this is done
+        # correctly
+        for ll in range(1, len(approx.samples_1d[0])):
+            n = approx.samples_1d[0][ll-1].shape[0]
+            assert np.allclose(approx.samples_1d[0][ll][:n],
+                               approx.samples_1d[0][ll-1])
+
     def test_approximate_sparse_grid_user_options(self):
         nvars = 3
         benchmark = setup_benchmark('ishigami', a=7, b=0.1)
@@ -39,7 +61,7 @@ class TestApproximate(unittest.TestCase):
             errors.append(error)
         univariate_quad_rule_info = [
             pya.clenshaw_curtis_in_polynomial_order,
-            pya.clenshaw_curtis_rule_growth]
+            pya.clenshaw_curtis_rule_growth, None, None]
         # ishigami has same value at first 3 points in clenshaw curtis rule
         # and so adaptivity will not work so use different rule
         # growth_rule=partial(pya.constant_increment_growth_rule,4)
@@ -237,6 +259,37 @@ class TestApproximate(unittest.TestCase):
         # plt.plot(train_samples[0,:], train_vals[:,0],'ro')
         # plt.show()
 
+    def test_adaptive_approximate_gaussian_process(self):
+        from sklearn.gaussian_process.kernels import Matern
+        num_vars = 1
+        univariate_variables = [stats.uniform(-1, 2)]*num_vars
+
+        # Generate random function
+        nu = np.inf  # 2.5
+        kernel = Matern(0.1, nu=nu)
+        X = np.linspace(-1, 1, 1000)[np.newaxis, :]
+        alpha = np.random.normal(0, 1, X.shape[1])
+        def fun(x):
+            return kernel(x.T, X.T).dot(alpha)[:, np.newaxis]
+            #return np.cos(2*np.pi*x.sum(axis=0)/num_vars)[:, np.newaxis]
+
+        errors = []
+        validation_samples = np.random.uniform(-1, 1, (num_vars, 100))
+        validation_values = fun(validation_samples)
+        def callback(gp):
+            gp_vals = gp(validation_samples)
+            assert gp_vals.shape == validation_values.shape
+            error = np.linalg.norm(gp_vals-validation_values)/np.linalg.norm(
+                validation_values)
+            print(error, gp.y_train_.shape[0])
+            errors.append(error)
+            
+        gp = adaptive_approximate(
+            fun, univariate_variables, 'gaussian_process',
+            {'nu': nu, 'noise_level': None, 'normalize_y': True, 'alpha': 1e-10,
+             'ncandidate_samples': 1e3, 'callback': callback}).approx
+        assert errors[-1] < 1e-8
+
     def test_approximate_fixed_pce(self):
         num_vars = 2
         univariate_variables = [stats.uniform(-1, 2)]*num_vars
@@ -353,3 +406,4 @@ if __name__ == "__main__":
     approximate_test_suite = unittest.TestLoader().loadTestsFromTestCase(
         TestApproximate)
     unittest.TextTestRunner(verbosity=2).run(approximate_test_suite)
+    

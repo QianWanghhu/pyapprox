@@ -67,52 +67,47 @@ def lanczos(nodes, weights, N):
 
     \bar{\alpha} are the current estimates of the recursion coefficients alpha
     \bar{\beta}  are the current estimates of the recursion coefficients beta
+
+    Lanczos is memory intensive for large numbers of nodes, e.g. from a 
+    set of samples, memory errors can be thrown.
     '''
     # assert weights define a probability measure. This function
     # can be applied to non-probability measures but I do not use this way
-    assert abs(weights.sum()-1) < 1e-15
+    assert abs(weights.sum()-1) < 2e-15
     nnodes = nodes.shape[0]
     assert N <= nnodes
     assert(nnodes == weights.shape[0])
-    alpha = nodes.copy().astype(float)
-    beta = np.zeros(nnodes)
-    beta[0] = weights[0]
-    for n in range(nnodes-1):
-        pi_sq, node = weights[n+1], nodes[n+1]
-        gamma_sq, sigma_sq, tau_km1 = 1., 0., 0.
-        for k in range(n+2):
-            beta_km1 = beta[k]
-            sigma_sq_km1 = sigma_sq
-            # \rho_k^2 = \beta^2_{k-1}+\pi^2_{k-1}
-            rho_sq = beta_km1 + pi_sq
-            # \bar(\beta)^2_{k-1}=\gamma^2_{k-1}\rho^2_k
-            beta[k] = gamma_sq * rho_sq
-            if rho_sq <= 0:
-                # \gamma^2_k=1, \sigma^2_k=0
-                gamma_sq, sigma_sq = 1., 0.
-            else:
-                # \gamma^2_k = \beta^2_{k-1}/rho^2_k
-                gamma_sq = beta_km1 / rho_sq
-                # \sigma^2_k = \pi^2_{k-1}/rho^2_k
-                sigma_sq = pi_sq / rho_sq
-            # \tau_k = \sigma^2_k(\alpha_k-\lambda)-\gamma^2\tau_{k-1}
-            tau_k = sigma_sq * (alpha[k] - node) - gamma_sq * tau_km1
-            # \bar{alpha}_k=\alpha_k-(\tau_k-\tau_{k-1})
-            alpha[k] = alpha[k] - (tau_k - tau_km1)
-            # if \sigma_k^2=0 : use <=0 to allow for rounding error
-            if sigma_sq <= 0:
-                # \pi^2_k = \sigma^2_{k-1}\beta^2_{k-1}
-                pi_sq = sigma_sq_km1 * beta_km1
-            else:
-                # \pi^2_k = \tau^2_{k}\sigma^2_{k}
-                pi_sq = (tau_k**2)/sigma_sq
+    alpha, beta = np.zeros(N), np.zeros(N)
+    vec = np.zeros(nnodes+1)
+    vec[0] = 1
+    qii = np.zeros((nnodes+1, nnodes+1))
+    qii[:, 0] = vec
+    sqrt_w = np.sqrt(weights)
+    northogonalization_steps = 2
+    for ii in range(N):
+        z = np.hstack(
+            [vec[0]+np.sum(sqrt_w*vec[1:nnodes+1]),
+             sqrt_w*vec[0]+nodes*vec[1:nnodes+1]])
 
-            tau_km1 = tau_k
+        if ii > 0:
+            alpha[ii-1] = vec.dot(z)
 
-    beta[0] = 1.0
+        for jj in range(northogonalization_steps):
+            z -= qii[:, :ii+1].dot(qii[:, :ii+1].T.dot(z))
+
+        if ii < N:
+            znorm = np.linalg.norm(z)
+            #beta[ii] = znorm**2 assume we want probability measure so
+            # no need to square here then take sqrt later
+            beta[ii] = znorm
+            vec = z / znorm
+            qii[:, ii+1] = vec
+
     alpha = np.atleast_2d(alpha[:N])
+    #beta = np.sqrt(np.atleast_2d(beta[:N]))
     beta = np.atleast_2d(beta[:N])
-    return np.concatenate((alpha.T, np.sqrt(beta.T)), axis=1)
+    return np.concatenate((alpha.T, beta.T), axis=1)
+
 
 
 def lanczos_deprecated(mat, vec):
@@ -255,7 +250,7 @@ def modified_chebyshev_orthonormal(nterms, quadrature_rule,
     # check if the range of moments is reasonable. If to large
     # can cause numerical problems
     abs_moments = np.absolute(moments)
-    assert abs_moments.max()-abs_moments.min() < 1e16
+    #assert abs_moments.max()-abs_moments.min() < 1e16
     ab = modified_chebyshev(nterms, moments, input_coefs)
     return convert_monic_to_orthonormal_recursion_coefficients(ab, probability)
 
@@ -354,8 +349,11 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
     nterms : integer
         The number of coefficients requested
 
-    measure : callable
-        The measure used to compute orthogonality
+    measure : callable or tuple
+        The function (measure) used to compute orthogonality. 
+        If a discrete measure then measure = tuple(xk, pk) where
+        xk are the probability masses locoation and pk are the weights
+        
 
     lb: float
         The lower bound of the measure (can be -infinity)
@@ -374,7 +372,20 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
 
     nquad_samples : integer
         The number of samples in the Gauss quadrature rule
+
+    Note the entry ab[-1, :] will likely be wrong when compared to analytical
+    formula if they exist. This does not matter because eval_poly does not 
+    use this value. If you want the correct value just request num_coef+1
+    coefficients.
     """
+
+    discrete_measure = not callable(measure)
+    if discrete_measure is True:
+        xk, pk = measure
+        assert xk.shape[0] == pk.shape[0]
+        assert nterms < xk.shape[0]
+        def measure(x):
+            return np.ones_like(x)
     
     ab = np.zeros((nterms, 2))
     nquad_samples = quad_options.get('nquad_samples', 100)
@@ -385,13 +396,23 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
     if np.isfinite(lb) and np.isfinite(ub):
         assert interval_size == ub-lb
 
-    def integrate(integrand, nquad_samples, interval_size):
+    def integrate_continuous(integrand, nquad_samples, interval_size):
         return integrate_using_univariate_gauss_legendre_quadrature_unbounded(
-            integrand, lb, ub, nquad_samples, **quad_opts, interval_size=interval_size)
+            integrand, lb, ub, nquad_samples, **quad_opts,
+            interval_size=interval_size)
+
+    def integrate_discrete(integrand, nquad_samples, interval_size):
+        return integrand(xk).dot(pk)
+
+    if discrete_measure is True:
+        integrate = integrate_discrete
+    else:
+        integrate = integrate_continuous
 
     # for probablity measures the following will always be one, but 
     # this is not true for other measures
-    ab[0, 1] = np.sqrt(integrate(measure, nquad_samples, interval_size=interval_size))
+    ab[0, 1] = np.sqrt(
+        integrate(measure, nquad_samples, interval_size=interval_size))
 
     for ii in range(1, nterms):
         # predict
@@ -402,7 +423,8 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
             ab[ii-1, 0] = 0
 
         if np.isfinite(lb) and np.isfinite(ub) and ii > 1:
-            # use previous intervals size for last degree as initial guess of size needed here
+            # use previous intervals size for last degree as initial guess
+            # of size needed here
             xx, __ = gauss_quadrature(ab, nterms)
             interval_size = xx.max()-xx.min()
 
@@ -410,7 +432,8 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
             pvals = evaluate_orthonormal_polynomial_1d(x, ii, ab)
             return measure(x)*pvals[:, ii]*pvals[:, ii-1]        
         G_ii_iim1 = integrate(
-            partial(integrand, measure), nquad_samples+ii, interval_size=interval_size)
+            partial(integrand, measure), nquad_samples+ii,
+            interval_size=interval_size)
         ab[ii-1, 0] += ab[ii-1, 1] * G_ii_iim1
         
         def integrand(measure, x):
@@ -420,7 +443,8 @@ def predictor_corrector(nterms, measure, lb, ub, interval_size=1,
             return measure(x)*pvals[:, ii]**2
         
         G_ii_ii =  integrate(
-            partial(integrand, measure), nquad_samples+ii, interval_size=interval_size)
+            partial(integrand, measure), nquad_samples+ii,
+            interval_size=interval_size)
         ab[ii, 1] *= np.sqrt(G_ii_ii)
 
     return ab
@@ -500,5 +524,45 @@ def predictor_corrector_product_of_functions_of_independent_variables(
             nterms, [(x, w), univariate_quad_rules[ii]],
             lambda x: x[0, :]*funs[ii](x[1,:]))
     return ab
-        
-        
+
+
+def apc_normalizing_constant(moments, nterms, monic_coefs):
+    assert moments.shape[0] >= 2*nterms+1
+    moment_mat = np.zeros((nterms+1, nterms+1))
+    for ii in range(nterms+1):
+        moment_mat[ii, :] = moments[ii:ii+nterms+1]
+    normal_c = np.sqrt(monic_coefs.T.dot(moment_mat).dot(monic_coefs))
+    return normal_c
+
+
+def apc_monic_coefficients(moments, nterms):
+    assert moments.shape[0] >= 2*nterms
+    moment_mat = np.zeros((nterms+1, nterms+1))
+    moment_mat[nterms, nterms] = 1.
+    for ii in range(nterms):
+        moment_mat[ii, :] = moments[ii:ii+nterms+1]
+    rhs = np.zeros(nterms+1)
+    rhs[nterms] = 1
+    coefs = np.linalg.solve(moment_mat, rhs)
+    return coefs
+
+
+def arbitrary_polynomial_chaos_recursion_coefficients(moments, num_coef):
+    moments = np.asarray(moments)
+    monic_coefs = np.zeros((num_coef, num_coef))
+    normalizing_constants = np.zeros(num_coef)
+    for ii in range(num_coef):
+        c =apc_monic_coefficients(moments, ii)
+        normalizing_constants[ii] = apc_normalizing_constant(moments, ii, c)
+        monic_coefs[0:ii+1, ii] = apc_monic_coefficients(
+            moments, ii)/normalizing_constants[ii]
+
+    ab = np.zeros((num_coef, 2))
+    ab[0, 1] = normalizing_constants[0]
+    ab[1, 1] = monic_coefs[0, 0]/monic_coefs[1, 1]
+    ab[1, 0] = -monic_coefs[0, 1]/monic_coefs[1, 1]
+    for ii in range(2, num_coef):
+        ab[ii, 1] = monic_coefs[ii-1, ii-1]/monic_coefs[ii, ii]
+        ab[ii, 0] = (monic_coefs[ii-2, ii-1]-ab[ii, 1]*
+                     monic_coefs[ii-1, ii])/monic_coefs[ii-1, ii-1]
+    return ab
